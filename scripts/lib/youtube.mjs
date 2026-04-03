@@ -1,6 +1,9 @@
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { extractVideoId } from './utils.mjs';
 
 const USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36';
+const execFileAsync = promisify(execFile);
 
 export async function fetchVideoBundle(inputUrl) {
   const videoId = extractVideoId(inputUrl);
@@ -8,7 +11,7 @@ export async function fetchVideoBundle(inputUrl) {
   const pageHtml = await fetchText(watchUrl);
   const playerResponse = extractPlayerResponse(pageHtml);
   const metadata = await fetchMetadata(inputUrl, playerResponse, videoId);
-  const transcript = await fetchTranscript(playerResponse, videoId);
+  const transcript = await fetchTranscript(playerResponse, videoId, inputUrl);
 
   return {
     videoId,
@@ -53,7 +56,7 @@ async function fetchMetadata(inputUrl, playerResponse, videoId) {
   };
 }
 
-async function fetchTranscript(playerResponse, videoId) {
+async function fetchTranscript(playerResponse, videoId, inputUrl) {
   const tracks = playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
   if (Array.isArray(tracks) && tracks.length > 0) {
     const preferredTrack = pickPreferredTrack(
@@ -71,6 +74,11 @@ async function fetchTranscript(playerResponse, videoId) {
   if (legacyTracks.length > 0) {
     const preferredTrack = pickPreferredTrack(legacyTracks);
     return fetchTranscriptFromLegacyTrack(preferredTrack, videoId);
+  }
+
+  const ytdlpTranscript = await fetchTranscriptViaYtDlp(inputUrl, videoId);
+  if (ytdlpTranscript) {
+    return ytdlpTranscript;
   }
 
   throw new Error(`No public captions available for video ${videoId}.`);
@@ -155,6 +163,10 @@ function extractTranscriptLines(bodyText) {
     return lines;
   }
 
+  if (trimmed.startsWith('WEBVTT')) {
+    return extractVttLines(trimmed);
+  }
+
   const xmlLineRegex = /<text\b[^>]*>([\s\S]*?)<\/text>/g;
   const lines = [];
   let match;
@@ -165,6 +177,30 @@ function extractTranscriptLines(bodyText) {
     }
   }
   return lines;
+}
+
+function extractVttLines(vttText) {
+  const lines = [];
+  for (const rawLine of vttText.split('\n')) {
+    const line = rawLine.trim();
+    if (!line) {
+      continue;
+    }
+    if (line === 'WEBVTT') {
+      continue;
+    }
+    if (line.includes('-->')) {
+      continue;
+    }
+    if (/^\d+$/.test(line)) {
+      continue;
+    }
+    if (line.startsWith('NOTE')) {
+      continue;
+    }
+    lines.push(decodeHtmlEntities(line).replace(/\s+/g, ' ').trim());
+  }
+  return lines.filter(Boolean);
 }
 
 async function fetchLegacyCaptionTracks(videoId) {
@@ -224,6 +260,71 @@ function decodeHtmlEntities(value) {
 
 function stripXmlTags(value) {
   return value.replace(/<[^>]+>/g, '');
+}
+
+async function fetchTranscriptViaYtDlp(inputUrl, videoId) {
+  try {
+    const { stdout } = await execFileAsync('yt-dlp', ['--skip-download', '--dump-single-json', inputUrl], {
+      maxBuffer: 20 * 1024 * 1024
+    });
+    const payload = JSON.parse(stdout);
+    const candidates = collectYtDlpCaptionCandidates(payload);
+    if (candidates.length === 0) {
+      return null;
+    }
+
+    const preferred = pickPreferredTrack(candidates);
+    const transcript = await fetchTranscriptJson3(preferred.url, videoId);
+    return {
+      languageCode: preferred.languageCode,
+      name: preferred.name,
+      text: transcript
+    };
+  } catch (error) {
+    // ytdlp is optional fallback; ignore errors and keep the original policy failure.
+    return null;
+  }
+}
+
+function collectYtDlpCaptionCandidates(payload) {
+  const groups = [
+    ['subtitles', payload?.subtitles],
+    ['automatic', payload?.automatic_captions]
+  ];
+  const candidates = [];
+
+  for (const [sourceName, source] of groups) {
+    if (!source || typeof source !== 'object') {
+      continue;
+    }
+    for (const [languageCode, entries] of Object.entries(source)) {
+      if (!Array.isArray(entries)) {
+        continue;
+      }
+      for (const entry of entries) {
+        const url = entry?.url;
+        if (!url) {
+          continue;
+        }
+        candidates.push({
+          source: sourceName,
+          languageCode,
+          name: entry?.name || languageCode,
+          ext: (entry?.ext || '').toLowerCase(),
+          url
+        });
+      }
+    }
+  }
+
+  // Prefer structured caption payloads before VTT.
+  candidates.sort((left, right) => {
+    const leftScore = left.ext === 'json3' ? 0 : left.ext === 'vtt' ? 1 : 2;
+    const rightScore = right.ext === 'json3' ? 0 : right.ext === 'vtt' ? 1 : 2;
+    return leftScore - rightScore;
+  });
+
+  return candidates;
 }
 
 async function fetchText(url) {

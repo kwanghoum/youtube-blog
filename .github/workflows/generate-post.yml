@@ -25,6 +25,11 @@ jobs:
         with:
           node-version: 22
 
+      - name: Install yt-dlp fallback dependency
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install yt-dlp
+
       - name: Generate blog post and cover image
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
