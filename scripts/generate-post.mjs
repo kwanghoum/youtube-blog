@@ -27,6 +27,7 @@ console.log(`Fetching YouTube data for ${requestedVideoId}...`);
 let videoId;
 let metadata;
 let transcript;
+let sourceMode = 'captions';
 
 try {
   const bundle = await fetchVideoBundle(sourceUrl);
@@ -42,11 +43,23 @@ try {
   const base = await fetchVideoMetadataOnly(sourceUrl);
   videoId = base.videoId;
   metadata = base.metadata;
-  transcript = await transcribeFromYoutubeAudio({
-    apiKey,
-    youtubeUrl: sourceUrl,
-    videoId
-  });
+  try {
+    transcript = await transcribeFromYoutubeAudio({
+      apiKey,
+      youtubeUrl: sourceUrl,
+      videoId
+    });
+    sourceMode = 'audio-transcription';
+  } catch (audioError) {
+    console.log(`Audio transcription fallback failed: ${audioError?.message || audioError}`);
+    console.log('Falling back to metadata-only generation...');
+    transcript = {
+      languageCode: 'n/a',
+      name: 'metadata-only-fallback',
+      text: buildMetadataOnlyTranscript(metadata, sourceUrl)
+    };
+    sourceMode = 'metadata-only';
+  }
 }
 
 console.log(`Generating blog content from captions (${transcript.languageCode})...`);
@@ -79,7 +92,7 @@ const post = {
   video_id: videoId,
   video_title: metadata.title,
   channel_name: metadata.channelName,
-  source_note: '생성 기준: 영상 자막/메타데이터 기반 재구성',
+  source_note: buildSourceNote(sourceMode),
   cover_image: coverImage,
   excerpt: generated.excerpt,
   tags: generated.tags,
@@ -93,3 +106,24 @@ const post = {
 
 await writeJson(path.join(process.cwd(), 'content', 'posts', `${slug}.json`), post);
 console.log(`Created content/posts/${slug}.json and content/images/${imageFilename}`);
+
+function buildSourceNote(mode) {
+  if (mode === 'captions') {
+    return '생성 기준: 영상 자막/메타데이터 기반 재구성';
+  }
+  if (mode === 'audio-transcription') {
+    return '생성 기준: 영상 오디오 전사/메타데이터 기반 재구성';
+  }
+  return '생성 기준: 영상 메타데이터 기반 요약(자막/오디오 전사 접근 불가)';
+}
+
+function buildMetadataOnlyTranscript(videoMetadata, url) {
+  const lines = [
+    `Video title: ${videoMetadata.title}`,
+    `Channel name: ${videoMetadata.channelName}`,
+    `Source URL: ${url}`,
+    'Transcript unavailable due to caption/transcription access limits.',
+    'Write a cautious informational summary focused on the likely topic, and avoid invented specifics.'
+  ];
+  return lines.join('\n');
+}
