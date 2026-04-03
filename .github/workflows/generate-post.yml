@@ -1,0 +1,46 @@
+name: Generate Blog Post
+
+on:
+  workflow_dispatch:
+    inputs:
+      youtube_url:
+        description: YouTube video URL with public captions
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Generate blog post and cover image
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          SITE_URL: ${{ vars.SITE_URL }}
+        run: |
+          node scripts/generate-post.mjs "${{ inputs.youtube_url }}"
+          node scripts/build-site.mjs
+
+      - name: Commit generated content
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add content docs
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "Generate blog post for ${{ inputs.youtube_url }}"
+          git push

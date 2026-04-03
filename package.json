@@ -1,0 +1,13 @@
+{
+  "name": "youtube-blog-pages",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build-site.mjs",
+    "generate": "node scripts/generate-post.mjs",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
