@@ -23,6 +23,15 @@ export async function fetchVideoBundle(inputUrl) {
   };
 }
 
+export async function fetchVideoMetadataOnly(inputUrl) {
+  const videoId = extractVideoId(inputUrl);
+  const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
+  const pageHtml = await fetchText(watchUrl);
+  const playerResponse = extractPlayerResponse(pageHtml);
+  const metadata = await fetchMetadata(inputUrl, playerResponse, videoId);
+  return { videoId, metadata };
+}
+
 async function fetchMetadata(inputUrl, playerResponse, videoId) {
   const oembedUrl = new URL('https://www.youtube.com/oembed');
   oembedUrl.searchParams.set('url', inputUrl);

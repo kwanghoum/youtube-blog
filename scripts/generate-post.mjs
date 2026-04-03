@@ -2,7 +2,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { generateBlogContent, generateCoverImage } from './lib/openai.mjs';
 import { findExistingPostByVideoId } from './lib/posts.mjs';
-import { fetchVideoBundle } from './lib/youtube.mjs';
+import { transcribeFromYoutubeAudio } from './lib/transcript-fallback.mjs';
+import { fetchVideoBundle, fetchVideoMetadataOnly } from './lib/youtube.mjs';
 import { buildSlug, contentImagePath, extractVideoId } from './lib/utils.mjs';
 import { writeJson } from './lib/fs-helpers.mjs';
 
@@ -23,7 +24,30 @@ if (existingPost) {
 }
 
 console.log(`Fetching YouTube data for ${requestedVideoId}...`);
-const { videoId, metadata, transcript } = await fetchVideoBundle(sourceUrl);
+let videoId;
+let metadata;
+let transcript;
+
+try {
+  const bundle = await fetchVideoBundle(sourceUrl);
+  videoId = bundle.videoId;
+  metadata = bundle.metadata;
+  transcript = bundle.transcript;
+} catch (error) {
+  if (!String(error?.message || '').includes('No public captions available')) {
+    throw error;
+  }
+
+  console.log('Public captions unavailable. Falling back to audio transcription...');
+  const base = await fetchVideoMetadataOnly(sourceUrl);
+  videoId = base.videoId;
+  metadata = base.metadata;
+  transcript = await transcribeFromYoutubeAudio({
+    apiKey,
+    youtubeUrl: sourceUrl,
+    videoId
+  });
+}
 
 console.log(`Generating blog content from captions (${transcript.languageCode})...`);
 const generated = await generateBlogContent({

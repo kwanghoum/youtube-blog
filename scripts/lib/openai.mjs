@@ -1,5 +1,6 @@
 const RESPONSES_URL = 'https://api.openai.com/v1/responses';
 const IMAGES_URL = 'https://api.openai.com/v1/images/generations';
+const TRANSCRIPTIONS_URL = 'https://api.openai.com/v1/audio/transcriptions';
 
 export async function generateBlogContent({ apiKey, metadata, transcript, sourceUrl }) {
   const prompt = [
@@ -114,6 +115,48 @@ export async function generateCoverImage({ apiKey, title, imagePrompt }) {
 
     return Buffer.from(image, 'base64');
   }, 2);
+}
+
+export async function transcribeAudioFile({ apiKey, audioBuffer, filename }) {
+  return withRetry(async () => {
+    const form = new FormData();
+    const file = new File([audioBuffer], filename, { type: guessAudioMimeType(filename) });
+    form.append('file', file);
+    form.append('model', process.env.OPENAI_TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe');
+
+    const response = await fetch(TRANSCRIPTIONS_URL, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${apiKey}`
+      },
+      body: form
+    });
+
+    if (!response.ok) {
+      throw new Error(await formatApiError('OpenAI transcription failed', response));
+    }
+
+    const payload = await response.json();
+    const text = (payload.text || '').trim();
+    if (!text) {
+      throw new Error('OpenAI transcription returned empty text.');
+    }
+    return text;
+  }, 2);
+}
+
+function guessAudioMimeType(filename) {
+  const lower = filename.toLowerCase();
+  if (lower.endsWith('.m4a')) {
+    return 'audio/mp4';
+  }
+  if (lower.endsWith('.mp3')) {
+    return 'audio/mpeg';
+  }
+  if (lower.endsWith('.webm')) {
+    return 'audio/webm';
+  }
+  return 'application/octet-stream';
 }
 
 function authHeaders(apiKey) {
