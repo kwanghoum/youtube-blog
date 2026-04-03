@@ -25,34 +25,14 @@ export async function fetchVideoBundle(inputUrl) {
 
 export async function fetchVideoMetadataOnly(inputUrl) {
   const videoId = extractVideoId(inputUrl);
-  const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
-  const pageHtml = await fetchText(watchUrl);
-  const playerResponse = extractPlayerResponse(pageHtml);
-  const metadata = await fetchMetadata(inputUrl, playerResponse, videoId);
+  const metadata = await fetchMetadataFromOembed(inputUrl, videoId);
   return { videoId, metadata };
 }
 
 async function fetchMetadata(inputUrl, playerResponse, videoId) {
-  const oembedUrl = new URL('https://www.youtube.com/oembed');
-  oembedUrl.searchParams.set('url', inputUrl);
-  oembedUrl.searchParams.set('format', 'json');
-
-  try {
-    const response = await fetch(oembedUrl, {
-      headers: { 'user-agent': USER_AGENT }
-    });
-
-    if (response.ok) {
-      const data = await response.json();
-      return {
-        title: data.title,
-        channelName: data.author_name,
-        thumbnailUrl: data.thumbnail_url,
-        videoId
-      };
-    }
-  } catch {
-    // Fall through to player response metadata.
+  const fromOembed = await fetchMetadataFromOembed(inputUrl, videoId);
+  if (fromOembed) {
+    return fromOembed;
   }
 
   const details = playerResponse?.videoDetails;
@@ -66,6 +46,35 @@ async function fetchMetadata(inputUrl, playerResponse, videoId) {
     thumbnailUrl: details.thumbnail?.thumbnails?.at(-1)?.url ?? '',
     videoId
   };
+}
+
+async function fetchMetadataFromOembed(inputUrl, videoId) {
+  const oembedUrl = new URL('https://www.youtube.com/oembed');
+  oembedUrl.searchParams.set('url', inputUrl);
+  oembedUrl.searchParams.set('format', 'json');
+
+  try {
+    const response = await fetch(oembedUrl, {
+      headers: { 'user-agent': USER_AGENT }
+    });
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = await response.json();
+    if (!data?.title || !data?.author_name) {
+      return null;
+    }
+
+    return {
+      title: data.title,
+      channelName: data.author_name,
+      thumbnailUrl: data.thumbnail_url || '',
+      videoId
+    };
+  } catch {
+    return null;
+  }
 }
 
 async function fetchTranscript(playerResponse, videoId, inputUrl) {

@@ -35,11 +35,8 @@ try {
   metadata = bundle.metadata;
   transcript = bundle.transcript;
 } catch (error) {
-  if (!String(error?.message || '').includes('No public captions available')) {
-    throw error;
-  }
-
-  console.log('Public captions unavailable. Falling back to audio transcription...');
+  console.log(`Primary YouTube extraction failed: ${error?.message || error}`);
+  console.log('Falling back to audio transcription path...');
   const base = await fetchVideoMetadataOnly(sourceUrl);
   videoId = base.videoId;
   metadata = base.metadata;
