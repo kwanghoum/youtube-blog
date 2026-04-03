@@ -1,4 +1,7 @@
 import { execFile } from 'node:child_process';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { promisify } from 'node:util';
 import { extractVideoId } from './utils.mjs';
 
@@ -79,6 +82,11 @@ async function fetchTranscript(playerResponse, videoId, inputUrl) {
   const ytdlpTranscript = await fetchTranscriptViaYtDlp(inputUrl, videoId);
   if (ytdlpTranscript) {
     return ytdlpTranscript;
+  }
+
+  const ytdlpFileTranscript = await fetchTranscriptViaYtDlpFiles(inputUrl, videoId);
+  if (ytdlpFileTranscript) {
+    return ytdlpFileTranscript;
   }
 
   throw new Error(`No public captions available for video ${videoId}.`);
@@ -286,6 +294,58 @@ async function fetchTranscriptViaYtDlp(inputUrl, videoId) {
   }
 }
 
+async function fetchTranscriptViaYtDlpFiles(inputUrl, videoId) {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'yt-sub-'));
+  try {
+    const outputTemplate = path.join(tempDir, '%(id)s.%(language)s.%(ext)s');
+    await execFileAsync(
+      'yt-dlp',
+      [
+        '--skip-download',
+        '--write-subs',
+        '--write-auto-subs',
+        '--sub-langs',
+        'ko.*,ko,en.*,en',
+        '--sub-format',
+        'vtt',
+        '--output',
+        outputTemplate,
+        inputUrl
+      ],
+      { maxBuffer: 20 * 1024 * 1024 }
+    );
+
+    const entries = await fs.readdir(tempDir);
+    const vttFiles = entries
+      .filter((name) => name.endsWith('.vtt'))
+      .sort((left, right) => languagePreferenceScore(left) - languagePreferenceScore(right));
+
+    if (vttFiles.length === 0) {
+      return null;
+    }
+
+    const selectedFile = vttFiles[0];
+    const filePath = path.join(tempDir, selectedFile);
+    const content = await fs.readFile(filePath, 'utf8');
+    const lines = extractVttLines(content);
+    const transcript = lines.join('\n').trim();
+    if (!transcript) {
+      return null;
+    }
+
+    const languageCode = inferLanguageFromFilename(selectedFile);
+    return {
+      languageCode,
+      name: languageCode,
+      text: transcript
+    };
+  } catch {
+    return null;
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+}
+
 function collectYtDlpCaptionCandidates(payload) {
   const groups = [
     ['subtitles', payload?.subtitles],
@@ -325,6 +385,24 @@ function collectYtDlpCaptionCandidates(payload) {
   });
 
   return candidates;
+}
+
+function languagePreferenceScore(filename) {
+  if (filename.includes('.ko')) {
+    return 0;
+  }
+  if (filename.includes('.en')) {
+    return 1;
+  }
+  return 2;
+}
+
+function inferLanguageFromFilename(filename) {
+  const parts = filename.split('.');
+  if (parts.length >= 3) {
+    return parts[parts.length - 2] || 'unknown';
+  }
+  return 'unknown';
 }
 
 async function fetchText(url) {
